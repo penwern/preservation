@@ -1,0 +1,27 @@
+CREATE TABLE IF NOT EXISTS preservation_configs (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    process_type TEXT CHECK(process_type IN ('standard', 'eark')) DEFAULT 'standard' NOT NULL,
+    compress_aip INTEGER DEFAULT 0,
+    gen_transfer_struct_report INTEGER DEFAULT 0,
+    document_empty_directories INTEGER DEFAULT 0,
+    extract_packages INTEGER DEFAULT 0,
+    delete_packages_after_extraction INTEGER DEFAULT 0,
+    normalize INTEGER DEFAULT 0,
+    compression_level INTEGER DEFAULT 1,
+    compression_algorithm TEXT CHECK(compression_algorithm IN ('tar', 'tar_bzip2', 'tar_gzip', 's7_copy', 's7_bzip2', 's7_lzma')),
+    image_normalization_tiff INTEGER DEFAULT 0,
+    created TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    modified TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    description TEXT,
+    user TEXT NOT NULL
+)
+
+CREATE TRIGGER update_modified_timestamp
+AFTER UPDATE ON preservation_configs
+FOR EACH ROW
+BEGIN
+    UPDATE preservation_configs
+    SET modified = CURRENT_TIMESTAMP
+    WHERE id = OLD.id;
+END;
