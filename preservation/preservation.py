@@ -23,7 +23,6 @@ file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelnam
 logger.addHandler(file_handler)
 logger.propagate = False # Don't maintain logger
 
-
 namespaces = {
     'premis': 'http://www.loc.gov/premis/v3',
     'xsi': 'http://www.w3.org/2001/XMLSchema-instance'
@@ -299,7 +298,7 @@ class Preservation():
         self.processing_directory.mkdir(parents=True, exist_ok=True)
         logger.debug(f"Created processing directory {self.processing_directory}")
         
-        self.db_manager = DatabaseManager(settings.DATABASE_FILE)
+        self.db_manager = DatabaseManager()
         
         # Get preservation and a3m config from database
         self.processing_config, a3m_config = self.db_manager.get_preservation_processing_configs(self.config_id)

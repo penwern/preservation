@@ -1,12 +1,15 @@
+import os
 import logging
 import sqlite3 as sqlite
 
 
 logger = logging.getLogger("preservation")
 
+DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '../data/preservation.db'))
+
 class DatabaseManager:
-    def __init__(self, db_file):
-        self.db_file = db_file
+    def __init__(self):
+        self.db_file = DB_PATH
 
     def get_preservation_processing_configs(self, config_id):
         """
