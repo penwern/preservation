@@ -69,7 +69,7 @@ class CurateManager():
         endpoint = f'{self._url}/a/user-meta/update'
         response = requests.request("PUT", endpoint, headers=headers, data=payload)
         response.raise_for_status()
-        logger.info(f"Tag: {tag}")
+        logger.debug(f"Tag: {tag}")
     
     def gather_child_nodes(self, parent_curate_node_path: str) -> list:
         """

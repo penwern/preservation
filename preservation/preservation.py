@@ -57,14 +57,11 @@ class Package():
         
         relative_path = self.curate_path.relative_to(self.curate_prefix)
         self.object_path = f'objects/data/{relative_path}'
+    
+        # Metadata
+        self.metadata = self._construct_metadata_json(node_json['MetaStore'])
         
-        # DC
-        curate_dc_metadata = {k: v for k, v in node_json['MetaStore'].items() if k.startswith('usermeta-dc-')}
-        self.dc_json = self._construct_dc_json(curate_dc_metadata) if curate_dc_metadata else []
-        
-        # ISAD(G)
-        curate_isadg_metadata = {k: v for k, v in node_json['MetaStore'].items() if k.startswith('usermeta-isadg-')}
-        self.isadg_json = self._construct_isadg_json(curate_isadg_metadata) if curate_isadg_metadata else []
+        logger.info(f"Metadata: {self.metadata}")
         
         # Premis
         curate_premis_metadata = json.loads(node_json['MetaStore'].get('usermeta-premis-data', '{}'))
@@ -86,34 +83,19 @@ class Package():
             return curate_node_mimetype.strip('"')
         else:
             return None
-        
-    def _construct_dc_json(self, curate_dc_metadata: dict) -> dict:
-        """
-        Expects dictionary of Curate Metastore 'usermeta-dc-' tags.
-        """
-        dc_json = {'filename': self.object_path}
-        
-        for key, value, in curate_dc_metadata.items():
-            value = value.strip('"')
-            if value != '':
-                dc_json[f"dc.{key[len('usermeta-dc-'):]}"] = value
-                
-        return dc_json if len(dc_json) > 1 else {}
-        
-    def _construct_isadg_json(self, curate_isadg_metadata: dict) -> ET.Element:
-        """
-        Expects dictionary of Curate Metastore 'usermeta-isadg-' tags.
-        """
-        logger.info(curate_isadg_metadata)
-        dc_json = {'filename': self.object_path}
-        
-        for key, value, in curate_isadg_metadata.items():
-            value = value.strip('"')
-            if value != '':
-                dc_json[f"isadg.{key[len('usermeta-isadg-'):]}"] = value
-                
-        return dc_json if len(dc_json) > 1 else {}
     
+    def _construct_metadata_json(self, curate_metastore: dict) -> dict:
+        """
+        Expects Curate node MetaStore dict
+        """
+        metadata_json = {'filename': self.object_path}
+        for key, value in curate_metastore.items():
+            if key.startswith('usermeta-dc-'):
+                metadata_json[f"dc.{key[len('usermeta-dc-'):]}"] = value
+            if key.startswith('usermeta-isadg-'):
+                metadata_json[f"isadg.{key[len('usermeta-isadg-'):]}"] = value
+        return metadata_json if len(metadata_json) > 1 else {}
+
     def _construct_premis_xml_events_list(self, premis_metadata: dict) -> list: 
         """
         Construct premis xml element from json extracted from curate node MetaStore
@@ -142,7 +124,7 @@ class Package():
             
             # Event Outcome Information
             event_outcome_information = ET.SubElement(event_element, f"{{{pns}}}eventOutcomeInformation")
-            ET.SubElement(event_outcome_information, f"{{{pns}}}eventOutcome").text = event_data["event_outcome_information"]["event_outcome"]
+            ET.SubElement(event_outcome_information, f"{{{pns}}}eventOutcome").text = str(event_data["event_outcome_information"]["event_outcome"]) # Ensure string - fixes issue with writing siegfried output
             event_outcome_detail = ET.SubElement(event_outcome_information, f"{{{pns}}}eventOutcomeDetail")
             ET.SubElement(event_outcome_detail, f"{{{pns}}}eventOutcomeDetailNote").text = event_data["event_outcome_information"]["event_outcome_detail"]["event_outcome_detail_note"]
 
@@ -206,30 +188,17 @@ class Package():
         """
         Writes DC and ISAD(G) json to package metadata directory.
         """
-        
-        dc_json_list = [self.dc_json] if self.dc_json else []
-        isadg_json_list = [self.isadg_json] if self.isadg_json else []
+        full_metadata_list = [self.metadata] if self.metadata else []
         for child in self.children:
-            if child.dc_json:
-                dc_json_list.append(child.dc_json)
-            if child.isadg_json:
-                isadg_json_list.append(child.isadg_json)
-        
+            if child.metadata:
+                full_metadata_list.append(child.metadata)
+                
         metadata_file_path = destination / 'metadata.json'
-        
-        full_metadata = dc_json_list + isadg_json_list
-        
-        logger.info(full_metadata)
-        
-        if full_metadata:
+        if full_metadata_list:
             with open(metadata_file_path, 'w') as metadata_file:
-                json.dump(full_metadata, metadata_file, indent=4)
-            
-            logger.info(f"Wrote json metadata to {metadata_file_path}.")
-            logger.debug(json.dumps(full_metadata, indent=4))
-        else:
-            logger.debug('No json metadata written.')
-          
+                json.dump(full_metadata_list, metadata_file, indent=4)
+            logger.debug(json.dumps(full_metadata_list, indent=4))
+        
     def write_premis_xml(self, destination: Path, premis_agents: list):
         """
         Write premis xml to package metadata directory
@@ -243,7 +212,7 @@ class Package():
         for package in [self] + self.children:
             if package.premis_xml_object:
                 premis_elem.append(package.premis_xml_object)
-                
+        
         # Attach event elements
         for package in [self] + self.children:
             if package.premis_xml_events_list:
@@ -254,7 +223,7 @@ class Package():
                         ET.SubElement(linking_agent_identifier, f"{{{namespaces['premis']}}}linkingAgentIdentifierType").text = agent['identifier']['type']
                         ET.SubElement(linking_agent_identifier, f"{{{namespaces['premis']}}}linkingAgentIdentifierValue").text = agent['identifier']['value']
                     premis_elem.append(event)
-                    
+        
         # Premis Agents
         for agent in premis_agents:
             agent_elem = ET.SubElement(premis_elem, "premis:agent")
@@ -366,7 +335,7 @@ class Preservation():
         - Creates transfer directory
         - Populates data directory
         - Writes metadata to metadata directory
-        Returns path to transfer directory
+        Returns path to transfer directory.
         """
         transfer_directory = processing_directory / 'transfer'
         transfer_data_path = transfer_directory / 'data'
@@ -395,7 +364,7 @@ class Preservation():
         package.write_premis_xml(transfer_metadata_path, self.premis_agents)
         
         return transfer_directory
-        
+    
     def execute_transfer(self, package: Package, processing_directoy: Package) -> Path:
         """
         Executes the a3m transfer.
@@ -437,62 +406,60 @@ class Preservation():
         logger.info(f"Uploaded {package.local_path} to Curate {curate_destination}.")
 
 
-def process_node(preserver: Preservation, node: dict):
+def process_node(preserver: Preservation, node: dict, processing_directory: Path):
     
-    logger.info(f"Processing node {node['Path']}")
-    
-    # Populate main package
-    package = Package(node)
-    
-    # Populate child packages of directory packages
-    if package.is_dir:
-        for child_node in preserver.curate_manager.gather_child_nodes(package.curate_path):
-            package.children.append(Package(child_node, package.curate_prefix))
-    
-    # Get a unique directory for processing package
-    processing_directory = preserver.get_new_processing_directory()
-    
-    # Download the package
-    preserver.curate_manager.update_tag(package.uuid, 'Processing package...')
-    downloaded_path = preserver.download_package(package, processing_directory)
-    package.update_local_path(downloaded_path)
-    
-    # Manipulate package to transfer state
-    preserver.curate_manager.update_tag(package.uuid, 'Preparing package...')
-    transfer_directory = preserver.prepare_package_for_transfer(package, processing_directory)
-    package.update_local_path(transfer_directory)
-    
-    # Execute A3M transfer on package
-    preserver.curate_manager.update_tag(package.uuid, 'Submitting package...')
-    aip_path = preserver.execute_transfer(package, processing_directory)
-    package.update_local_path(aip_path)
-    preserver.curate_manager.update_tag(package.uuid, 'Submitted package...')
-    
-    # Compress AIP if enabled in processing config
-    if preserver.processing_config['compress_aip']:
-        preserver.curate_manager.update_tag(package.uuid, 'Compressing AIP...')
-        extracted_path = preserver.compress_package(package)
-        package.update_local_path(extracted_path)
-    
-    # Upload to Curate
-    preserver.curate_manager.update_tag(package.uuid, 'Uploading AIP...')
-    preserver.upload_package(package)
+    try:
+        logger.info(f"Processing node {node['Path']}")
+        
+        # Populate main package
+        package = Package(node)
+        
+        # Populate child packages of directory packages
+        if package.is_dir:
+            for child_node in preserver.curate_manager.gather_child_nodes(package.curate_path):
+                package.children.append(Package(child_node, package.curate_prefix))
+        
+        # Download the package
+        preserver.curate_manager.update_tag(package.uuid, 'Processing package...')
+        downloaded_path = preserver.download_package(package, processing_directory)
+        package.update_local_path(downloaded_path)
+        
+        # Manipulate package to transfer state
+        preserver.curate_manager.update_tag(package.uuid, 'Preparing package...')
+        transfer_directory = preserver.prepare_package_for_transfer(package, processing_directory)
+        package.update_local_path(transfer_directory)
+        
+        # Execute A3M transfer on package
+        preserver.curate_manager.update_tag(package.uuid, 'Submitting package...')
+        aip_path = preserver.execute_transfer(package, processing_directory)
+        package.update_local_path(aip_path)
+        
+        # Compress AIP if enabled in processing config
+        if preserver.processing_config['compress_aip']:
+            preserver.curate_manager.update_tag(package.uuid, 'Compressing AIP...')
+            extracted_path = preserver.compress_package(package)
+            package.update_local_path(extracted_path)
+        
+        # Upload to Curate
+        preserver.curate_manager.update_tag(package.uuid, 'Uploading AIP...')
+        preserver.upload_package(package)
+    except Exception as e:
+        logger.error(e)
+        preserver.curate_manager.update_tag(package.uuid, 'Preservation Failed - Try Again')
+        # shutil.rmtree(processing_directory)
+        # raise e
+        
     
 def main():
     args = parse_arguments()
     
-    # logger.debug(args)
-    
-    # For Testing
-    # with open('/var/cells/penwern/services/preservation/preservation/test_nodes.json', 'r') as file:
-    #     data = json.load(file)
-    #     args.nodes = data
+    logger.debug("Arguments: {args}")
 
     preserver = Preservation(config_id = args.config_id, user=args.user)
     
     for node in json.loads(args.nodes):
-        process_node(preserver, node)
-        
+        processing_directory = preserver.get_new_processing_directory()
+        process_node(preserver, node, processing_directory)
 
 if __name__ == '__main__':
     logger.info(' =============== NEW =============== ')

@@ -1,13 +1,14 @@
 import re
+from uuid import uuid4
 import docker
 import logging
 import time
+import re
 from pathlib import Path
 
 
 docker_client = docker.from_env()
 logger = logging.getLogger("preservation")
-
 
 class A3MManager:
     def __init__(self, config: dict, processing_directory: Path, a3m_version: str):
@@ -72,8 +73,26 @@ class A3MManager:
                 return
             time.sleep(5)
         raise TimeoutError(f"Container {daemon.name} did not become healthy within {timeout} seconds")
+    
+    def _sanitize_container_name(self, input_string: str) -> str:
+        """
+        Convert input string to fit docker container name format.
+        Adds UUID.
+        """
+        sanitized_string = re.sub(r'[^a-zA-Z0-9_.-]', '_', input_string)
+        
+        if not re.match(r'^[a-zA-Z0-9]', sanitized_string):
+            sanitized_string = '_' + sanitized_string
+        
+        if not re.match(r'[a-zA-Z0-9]$', sanitized_string):
+            sanitized_string += '_'
+        
+        return sanitized_string + str(uuid4())
 
     def execute_a3m_transfer(self, transfer_path: Path, transfer_name: str) -> str:
+        """
+        Execute an A3M transfer.
+        """
         commands = [
             "-m", "a3m.cli.client",
             "--address=a3md:7000",
@@ -84,11 +103,13 @@ class A3MManager:
         for k, v in self.processing_config.items():
             commands.append("--processing-config")
             commands.append(f"{k}={v}")
+        container_name = self._sanitize_container_name(transfer_name)
+        logger.info(f'Creating Container: {container_name}')
         logger.info(f'Starting A3M transfer {transfer_path}')
         logger.debug(f'Commands {commands}')
         container = docker_client.containers.run(
             f"ghcr.io/artefactual-labs/a3m:{self.a3m_version}",
-            name="a3mc",
+            name=container_name,
             detach=True,
             network="a3m-network",
             entrypoint="python",
@@ -118,7 +139,7 @@ class A3MManager:
     
     def move_file_in_container(self, src_path: Path, dst_path: Path) -> Path:
         """
-        Moves a file within the container.
+        Move a file within the running a3m daemon.
         """
         exec_result = self.daemon.exec_run(f'mv "{src_path}" "{dst_path}"', user="root")
         new_path = dst_path / src_path.name

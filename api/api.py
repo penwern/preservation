@@ -5,7 +5,7 @@ from datetime import datetime
 from flask import Flask, request, jsonify
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
-# from wtforms.validators import Range, AnyOf, Length
+from flask_cors import CORS, cross_origin
 from marshmallow import Schema, fields, ValidationError
 from marshmallow.validate import Length, OneOf, Range
 
@@ -21,6 +21,9 @@ logger.addHandler(file_handler)
 logger.propagate = False
 
 app = Flask(__name__)
+cors = CORS(app)
+app.config['CORS_HEADERS'] = 'Content-Type'
+
 limiter = Limiter(
     get_remote_address,
     app=app,
@@ -57,12 +60,12 @@ class ConfigSchema(Schema):
     description = fields.String(validate=Length(max=255))
     user = fields.String(required=True, validate=Length(max=255))
 
-# @app.before_request
-# def check_referer():
-#     # Referer header can be easily spoofed. Data is not sensitive.
-#     referer = request.headers.get("Referer")
-#     if referer is None or not referer.startswith(f"{ALLOWED_ORIGIN}/"):
-#         return jsonify({"error": "Unauthorized"}), 401
+@app.before_request
+def check_referer():
+    # Referer header can be easily spoofed. Data is not sensitive.
+    referer = request.headers.get("Referer")
+    if referer is None or not referer.startswith(f"{ALLOWED_ORIGIN}/"):
+        return jsonify({"error": "Unauthorized"}), 401
     
 @app.route("/")
 @limiter.limit("10 per minute") 
@@ -71,110 +74,86 @@ def index():
     return "<h1>Hello!</h1>"
 
 # Get all configs
-@app.route('/configs', methods=['GET'])
+@app.route('/get_data', methods=['GET'])
 @limiter.limit("10 per minute") 
+@cross_origin()
 def get_all_configs():
     logger.info("Getting all configs")
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('SELECT * FROM preservation_configs')
-    configs = cursor.fetchall()
+    # configs = cursor.fetchall()
+    configs = [dict(zip([column[0] for column in cursor.description], row)) for row in cursor.fetchall()]
+    
     conn.close()
     logger.info(configs)
     return jsonify(configs)
 
-# Get one config by ID
-@app.route('/configs/<int:id>', methods=['GET'])
-@limiter.limit("10 per minute") 
-def get_config(id):
-    logger.info(f"Getting config: {id}")
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute('SELECT * FROM preservation_configs WHERE id = ?', (id,))
-    config = cursor.fetchone()
-    conn.close()
-    if config:
-        logger.info(config)
-        return jsonify(config)
-    else:
-        return jsonify({'error': 'Config not found'}), 404
-
-# Update existing config
-@app.route('/configs/<int:id>', methods=['PUT'])
-@limiter.limit("10 per minute") 
-def update_config(id):
-    logger.info(f"Updating config: {id}")
-    
-    data = request.json
-    logger.info(data)
-    
-    # Validate JSON payload using Marshmallow schema
-    try:
-        v_data = ConfigSchema().load(data)
-    except ValidationError as e:
-        logger.info(f"Error: {e.messages}")
-        return jsonify({'error': e.messages}), 400
-    
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute('''
-        UPDATE preservation_configs
-        SET name=?, process_type=?, compress_aip=?, gen_transfer_struct_report=?,
-            document_empty_directories=?, extract_packages=?, delete_packages_after_extraction=?,
-            normalize=?, compression_level=?, compression_algorithm=?, image_normalization_tiff=?,
-            modified=CURRENT_TIMESTAMP, description=?, user=?
-        WHERE id=?
-    ''', (v_data['name'], v_data['process_type'], v_data.get('compress_aip', None),
-          v_data.get('gen_transfer_struct_report', None), v_data.get('document_empty_directories', None),
-          v_data.get('extract_packages', None), v_data.get('delete_packages_after_extraction', None),
-          v_data.get('normalize', None), v_data.get('compression_level', None),
-          v_data.get('compression_algorithm', None), v_data.get('image_normalization_tiff', None),
-          v_data.get('description', None), v_data.get('user', None), id))
-    conn.commit()
-    conn.close()
-    logger.info("Updated")
-    return jsonify({'success': True})
-
-# Add new config
-@app.route('/configs', methods=['POST'])
+# Update or add new data
+@app.route('/set_data', methods=['POST'])
 @limiter.limit("10 per minute") 
 def add_config():
-    logger.info("Adding new config")
     data = request.json
-    logger.info(data)
-    
-    # Validate JSON payload using Marshmallow schema
+    logger.info(f"Received data: {data}")
+
     try:
         v_data = ConfigSchema().load(data)
     except ValidationError as e:
         logger.info(f"Error: {e.messages}")
         return jsonify({'error': e.messages}), 400
+
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+
+        # Check if ID exists in database
+        if 'id' in v_data:
+            logger.info(f"Updating config with ID: {v_data['id']}")
+            if cursor.execute("SELECT id FROM preservation_configs WHERE id=?", (v_data['id'],)).fetchone():
+                cursor.execute('''
+                    UPDATE preservation_configs
+                    SET name=?, process_type=?, compress_aip=?, gen_transfer_struct_report=?,
+                        document_empty_directories=?, extract_packages=?, delete_packages_after_extraction=?,
+                        normalize=?, compression_level=?, compression_algorithm=?, image_normalization_tiff=?,
+                        modified=CURRENT_TIMESTAMP, description=?, user=?
+                    WHERE id=?
+                ''', (v_data['name'], v_data['process_type'], v_data.get('compress_aip', None),
+                        v_data.get('gen_transfer_struct_report', None), v_data.get('document_empty_directories', None),
+                        v_data.get('extract_packages', None), v_data.get('delete_packages_after_extraction', None),
+                        v_data.get('normalize', None), v_data.get('compression_level', None),
+                        v_data.get('compression_algorithm', None), v_data.get('image_normalization_tiff', None),
+                        v_data.get('description', None), v_data.get('user', None), v_data['id']))
+                logger.info("Updated")
+            else:
+                return jsonify({'error': 'Config ID not found.'}), 404
+        else:
+            logger.info("Adding new config")
+            cursor.execute('''
+                INSERT INTO preservation_configs (name, process_type, compress_aip, gen_transfer_struct_report,
+                    document_empty_directories, extract_packages, delete_packages_after_extraction,
+                    normalize, compression_level, compression_algorithm, image_normalization_tiff,
+                    description, user)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (v_data['name'], v_data['process_type'], v_data.get('compress_aip', None),
+                v_data.get('gen_transfer_struct_report', None), v_data.get('document_empty_directories', None),
+                v_data.get('extract_packages', None), v_data.get('delete_packages_after_extraction', None),
+                v_data.get('normalize', None), v_data.get('compression_level', None),
+                v_data.get('compression_algorithm', None), v_data.get('image_normalization_tiff', None),
+                v_data.get('description', None), v_data.get('user', None)))
+            logger.info("Added")
+
+        conn.commit()
     
-    logger.info(v_data)
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute('''
-        INSERT INTO preservation_configs (name, process_type, compress_aip, gen_transfer_struct_report,
-            document_empty_directories, extract_packages, delete_packages_after_extraction,
-            normalize, compression_level, compression_algorithm, image_normalization_tiff,
-            description, user)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (v_data['name'], v_data['process_type'], v_data.get('compress_aip', None),
-          v_data.get('gen_transfer_struct_report', None), v_data.get('document_empty_directories', None),
-          v_data.get('extract_packages', None), v_data.get('delete_packages_after_extraction', None),
-          v_data.get('normalize', None), v_data.get('compression_level', None),
-          v_data.get('compression_algorithm', None), v_data.get('image_normalization_tiff', None),
-          v_data.get('description', None), v_data.get('user', None)))
-    conn.commit()
-    conn.close()
-    logger.info("Added")
-    
-    return jsonify({'success': True}), 201
+    return jsonify({'success': True})
 
 # Delete config by ID
-@app.route('/configs/<int:id>', methods=['DELETE'])
+@app.route('/delete_data/<int:id>', methods=['DELETE'])
 @limiter.limit("10 per minute")
 def delete_config(id):
+    
+    if id == 1:
+        logger.error(f"Can't delete default configuration. ID: {id}")
+        return jsonify({'error': "Can't delete default config"}), 404
+    
     logger.info(f"Deleting config: {id}")
     
     conn = sqlite3.connect(DB_PATH)
@@ -196,6 +175,3 @@ def delete_config(id):
         conn.close()
         logger.error(f"Config with ID {id} not found")
         return jsonify({'error': 'Config not found'}), 404
-    
-if __name__ == '__main__':
-    app.run(debug=True)
