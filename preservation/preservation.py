@@ -2,6 +2,8 @@ import argparse
 import json
 import logging
 import shutil
+import subprocess
+import sys
 import zipfile
 import xml.etree.ElementTree as ET
 from uuid import uuid4
@@ -16,9 +18,9 @@ from database import DatabaseManager
 
 
 logger = logging.getLogger("preservation")
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.DEBUG)
 logger.handlers.clear() # Remove existing handlers to prevent duplicate logging
-file_handler = logging.FileHandler(f'{settings.LOG_DIRECTORY}/preservation_{str(datetime.now().date())}.log')
+file_handler = logging.FileHandler(f'{settings.LOG_DIRECTORY}/preservation.log')
 file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
 logger.addHandler(file_handler)
 logger.propagate = False # Don't maintain logger
@@ -307,9 +309,17 @@ class Preservation():
         Extract 7z archive to same directory.
         """
         target_folder = archive_path.parent
-        with SevenZipFile(archive_path, mode='r') as z:
-            z.extractall(target_folder)
+
+        command = ['7z', 'x', str(archive_path), '-o' + str(target_folder)]
+        try:
+            subprocess.run(command, check=True)
+            logger.debug("Extraction completed successfully.")
+        except subprocess.CalledProcessError as e:
+            logger.error(f"An error occurred during extraction: {e}")
+            raise
+
         return target_folder / archive_path.stem
+
         
     def get_new_processing_directory(self) -> Path:
         """
@@ -447,19 +457,29 @@ def process_node(preserver: Preservation, node: dict, processing_directory: Path
         logger.error(e)
         preserver.curate_manager.update_tag(package.uuid, 'Preservation Failed - Try Again')
         # shutil.rmtree(processing_directory)
-        # raise e
-        
+        raise e
+    preserver.curate_manager.update_tag(package.uuid, '🔒 Preserved')
     
 def main():
-    args = parse_arguments()
-    
-    logger.debug("Arguments: {args}")
 
-    preserver = Preservation(config_id = args.config_id, user=args.user)
-    
+    logger.debug(f"Arguments: {sys.argv}")
+    try:
+        args = parse_arguments()
+    except Exception as e:
+        logger.error(e)
+        raise
+    logger.debug(f"Node Type: {type(args.nodes)}") 
+    try:
+        preserver = Preservation(config_id = args.config_id, user=args.user)
+    except Exception as e:
+        logger.error(e)
+        raise
     for node in json.loads(args.nodes):
-        processing_directory = preserver.get_new_processing_directory()
-        process_node(preserver, node, processing_directory)
+        try:
+            processing_directory = preserver.get_new_processing_directory()
+            process_node(preserver, node, processing_directory)
+        except Exception:
+            continue
 
 if __name__ == '__main__':
     logger.info(' =============== NEW =============== ')
@@ -467,5 +487,6 @@ if __name__ == '__main__':
         main()
     except Exception as e:
         logger.error(e)
-        raise e
+        raise
     logger.info(' ============= COMPLETE ============= \n')
+

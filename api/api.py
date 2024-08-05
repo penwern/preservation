@@ -14,7 +14,7 @@ logger = logging.getLogger("preservation_api")
 logger.setLevel(logging.INFO)
 # Remove existing handlers to prevent duplicate logging
 logger.handlers.clear()
-file_handler = logging.FileHandler(f'/var/cells/penwern/logs/preservation_api_{str(datetime.now().date())}.log')
+file_handler = logging.FileHandler(f'/var/cells/penwern/logs/preservation_api.log')
 file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
 logger.addHandler(file_handler)
 # Don't maintain logger

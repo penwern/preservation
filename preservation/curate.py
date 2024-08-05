@@ -112,6 +112,8 @@ class CurateManager():
             raise ValueError("Expected a single file or folder to be downloaded.")
 
     def upload_node(self, file_path: Path, curate_destination: str) -> Path:
+        if self._has_expired():
+            self._gen_new_token()
         subprocess.run(
             ['cec', 'scp', str(file_path), f'cells://{curate_destination}/'],
             capture_output=True,
