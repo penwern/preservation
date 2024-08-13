@@ -452,6 +452,7 @@ def process_node(preserver: Preservation, node: dict, processing_directory: Path
         aip_uuid = preserver.execute_transfer(package)
         
         # Extract and move AIP
+        preserver.curate_manager.update_tag(package.uuid, 'Extracting AIP...')
         expected_container_aip_path = Path(f"/home/a3m/.local/share/a3m/share/completed/{(package.curate_path.stem).replace(' ', '')}-{aip_uuid}.7z")
         extracted_aip_path = preserver.move_and_extract_aip(processing_directory, expected_container_aip_path)
         package.update_current_path(extracted_aip_path)
