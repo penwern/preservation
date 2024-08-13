@@ -472,7 +472,14 @@ def process_node(preserver: Preservation, node: dict, processing_directory: Path
                 raise ValueError("Slug not found in package metadata.")
             preserver.curate_manager.update_tag(package.uuid, 'Uploading DIP...')
             preserver.upload_dip_to_atom(aip_uuid, processing_directory, package.atom_slug)
-        preserver.curate_manager.update_tag(package.uuid, '🔒 Preserved')
+
+        if preserver.user in ['admin']:
+            now = time.time()
+            length = now - start
+            preserver.curate_manager.update_tag(package.uuid, f'🔒 Preserved in {length:.2f}s')
+        else:
+            preserver.curate_manager.update_tag(package.uuid, '🔒 Preserved')
+
     except Exception as e:
         logger.error(e)
         preserver.curate_manager.update_tag(package.uuid, 'Preservation Failed - Try Again')
@@ -484,3 +491,4 @@ def process_node(preserver: Preservation, node: dict, processing_directory: Path
     
     logger.info(f"Removing processing directory {processing_directory}")
     shutil.rmtree(processing_directory)
+
