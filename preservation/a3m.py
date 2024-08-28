@@ -31,15 +31,26 @@ class A3MManager:
             docker_client.networks.get("a3m-network")
             logger.debug('A3M network found')
         except docker.errors.NotFound as e:
-            logger.error("A3M network not found.")
-            raise RuntimeError("A3M network not found.") from e
+            err_msg = f"A3M network not found: {e}"
+            logger.error(err_msg)
+            raise RuntimeError("A3M network not found") from e
+        except Exception as e:
+            err_msg = f"Unexpected error: {e}"
+            logger.error(err_msg)
+            raise RuntimeError(err_msg) from e
 
         try:
             a3md_container = docker_client.containers.get("a3md")
             logger.debug('A3M Daemon container found')
         except docker.errors.NotFound as e:
-            logger.error("A3M Daemon container not found.")
-            raise RuntimeError("A3M Daemon container not found.") from e
+            err_msg = f"A3M Daemon container not found: {e}"
+            logger.error(err_msg)
+            raise RuntimeError(err_msg) from e
+        except Exception as e:
+            err_msg = f"Unexpected error: {e}"
+            logger.error(err_msg)
+            raise RuntimeError(err_msg) from e
+        
         return a3md_container
 
     def _sanitize_container_name(self, input_string: str) -> str:
@@ -90,6 +101,7 @@ class A3MManager:
 
         if exit_status['StatusCode'] != 0:
             err_msg = f"Transfer failed with exit code: {exit_status['StatusCode']}"
+            logger.error(err_msg)
             logger.debug(f"Container logs: {container_logs}")
             raise RuntimeError(err_msg)
 
@@ -100,7 +112,9 @@ class A3MManager:
             reversed_logs
         )[0]
         if aip_uuid is None:
-            raise RuntimeError("Could not find AIP UUID")
+            err_msg = "Could not find AIP UUID"
+            logger.error(err_msg)
+            raise RuntimeError(err_msg)
         logger.debug(f"AIP UUID: {aip_uuid}")
         return aip_uuid
     
@@ -112,14 +126,16 @@ class A3MManager:
         new_path = dst_path / src_path.name
 
         if mv_exec_result.exit_code != 0:
-            logger.debug(mv_exec_result)
-            raise RuntimeError(f"Failed to move the file within the container: {mv_exec_result.output}")
+            err_msg = f"Failed to move the file within the container: {mv_exec_result.output}"
+            logger.error(err_msg)
+            raise RuntimeError(err_msg)
         
         # Change ownership of the file to the current user
         chown_exec_result = self.daemon.exec_run(f'chown -R {os.getuid()}:{os.getgid()} "{new_path}"', user="root")
 
         if chown_exec_result.exit_code != 0:
-            logger.debug(chown_exec_result)
-            raise RuntimeError(f"Failed to move the file within the container: {mv_exec_result.output}")
+            err_msg = f"Failed to change ownership of the file within the container: {chown_exec_result.output}"
+            logger.error(err_msg)
+            raise RuntimeError(err_msg)
         
         return new_path

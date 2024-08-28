@@ -475,12 +475,12 @@ def process_node(preserver: Preservation, node: dict, processing_directory: Path
         preserver.curate_manager.update_tag(package.uuid, '🔒 Preserved')
     except Exception as e:
         logger.error(e)
+        logger.info(f"============= Failed {node['Path']} in {length:.2f} seconds =============")
         preserver.curate_manager.update_tag(package.uuid, 'Preservation Failed - Try Again')
         raise 
-    finally:
-        end = time.time()
-        length = end - start
-        logger.info(f"Finished processing {node['Path']} in {length:.2f} seconds")
+    end = time.time()
+    length = end - start
+    logger.info(f"============= Completed {node['Path']} in {length:.2f} seconds =============")
     
     logger.info(f"Removing processing directory {processing_directory}")
     shutil.rmtree(processing_directory)

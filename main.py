@@ -43,8 +43,10 @@ if __name__ == '__main__':
         main()
     except Exception as e:
         logger.error(e)
-        raise
-    finally:
         end = time.time()
         length = end - start
-        logger.info(f' ============= COMPLETED in {length:.2f} seconds ============= \n')
+        logger.info(f' ============= FALIED in {length:.2f} seconds ============= \n')
+        raise
+    end = time.time()
+    length = end - start
+    logger.info(f' ============= COMPLETED in {length:.2f} seconds ============= \n')
