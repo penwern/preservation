@@ -1,6 +1,6 @@
 import logging
 import requests
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from db.models.atom_model import AtomConfigModel
 from db.schemas.atom_schema import AtomConfigSchema
 
@@ -40,9 +40,10 @@ async def set_atom_config(config: AtomConfigSchema):
         raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
 
 @router.get("/search")
-async def search_atom(params: dict[str, str]):
+async def search_atom(request: Request):
     try:
-        logger.info(f"Searching AtoM with parameters: {params}")
+        query_string = request.url.query
+        logger.info(f"Searching AtoM with parameters: {query_string}")
         atom_config = AtomConfigModel.get_config_from_db()
         
         if not atom_config:
@@ -52,10 +53,10 @@ async def search_atom(params: dict[str, str]):
         
         config = AtomConfigSchema(**atom_config)
         
-        atom_api_url = f"{config.atom_url}/api/informationobjects"
+        atom_api_url = f"{config.atom_url}/api/informationobjects/{query_string}"
         headers = {'REST-API-Key': config.atom_api_key}
 
-        response = requests.get(atom_api_url, headers=headers, params=params)
+        response = requests.get(atom_api_url, headers=headers)
 
         if response.status_code != 200:
             logger.error(f"Error from AtoM API: {response.status_code}")
