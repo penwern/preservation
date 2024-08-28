@@ -452,6 +452,7 @@ def process_node(preserver: Preservation, node: dict, processing_directory: Path
         aip_uuid = preserver.execute_transfer(package)
         
         # Extract and move AIP
+        preserver.curate_manager.update_tag(package.uuid, 'Extracting AIP...')
         expected_container_aip_path = Path(f"/home/a3m/.local/share/a3m/share/completed/{(package.curate_path.stem).replace(' ', '')}-{aip_uuid}.7z")
         extracted_aip_path = preserver.move_and_extract_aip(processing_directory, expected_container_aip_path)
         package.update_current_path(extracted_aip_path)
@@ -472,7 +473,14 @@ def process_node(preserver: Preservation, node: dict, processing_directory: Path
                 raise ValueError("Slug not found in package metadata.")
             preserver.curate_manager.update_tag(package.uuid, 'Uploading DIP...')
             preserver.upload_dip_to_atom(aip_uuid, processing_directory, package.atom_slug)
-        preserver.curate_manager.update_tag(package.uuid, '🔒 Preserved')
+
+        if preserver.user in ['admin']:
+            now = time.time()
+            length = now - start
+            preserver.curate_manager.update_tag(package.uuid, f'🔒 Preserved in {length:.2f}s')
+        else:
+            preserver.curate_manager.update_tag(package.uuid, '🔒 Preserved')
+
     except Exception as e:
         logger.error(e)
         logger.info(f"============= Failed {node['Path']} in {length:.2f} seconds =============")
@@ -484,3 +492,4 @@ def process_node(preserver: Preservation, node: dict, processing_directory: Path
     
     logger.info(f"Removing processing directory {processing_directory}")
     shutil.rmtree(processing_directory)
+

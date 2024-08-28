@@ -43,6 +43,9 @@ Pydio Cells must be running before preservation can be started.
 ### Pydio Cells Client
 Pydio Cells Client must be installed and configured before preservation can be started.
 
+### Penwern Curate Preservation API
+[Penwern Curate Preservation API](api/README.md) should be run at least once before preservation can be started to create the db file.
+
 ## Python Requirements
 ```
 # As pydio user
