@@ -2,7 +2,6 @@ import os
 import logging
 import sqlite3 as sqlite
 
-
 logger = logging.getLogger("preservation")
 
 DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '../data/preservation.db'))
@@ -40,9 +39,27 @@ class DatabaseManager:
             "normalize": bool(matching_row[8]),
             "aip_compression_level": matching_row[9],
             "aip_compression_algorithm": matching_row[10],
+            "dip_enabled": bool(matching_row[16])
         }
-        logger.info(f"Loaded configs from database.")
+        logger.debug(f"Loaded processing configs from database.")
         logger.debug(f"Processing config: {processing_config}.")
         logger.debug(f"A3M config: {a3m_config}.")
         return processing_config, a3m_config
             
+    def get_atom_config(self):
+        with sqlite.connect(self.db_file) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM atom_config")
+            matching_row = cursor.fetchone()
+            if not matching_row:
+                logger.debug(f"AtoM config not found in database.")
+                return None
+            atom_config = {
+                "url": matching_row[1],
+                "api_key": matching_row[2],
+                "username": matching_row[3],
+                "password": matching_row[4]
+            }
+        logger.debug(f"Loaded AtoM configs from database.")
+        logger.debug(f"AtoM config: {atom_config}.")
+        return atom_config

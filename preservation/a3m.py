@@ -1,3 +1,4 @@
+import os
 import re
 from uuid import uuid4
 import docker
@@ -6,15 +7,14 @@ import time
 import re
 from pathlib import Path
 
-
 docker_client = docker.from_env()
 logger = logging.getLogger("preservation")
 
 class A3MManager:
-    def __init__(self, config: dict, processing_directory: Path, a3m_version: str):
+    def __init__(self, config: dict, a3m_docker_image: str):
         self.processing_config = config
-        self.a3m_version = a3m_version
-        self.daemon = self._initiate_daemon(processing_directory)
+        self.a3m_docker_image = a3m_docker_image
+        self.daemon = self._a3md_checks()
 
     def _construct_processing_config_string(self) -> str:
         config_string = ""
@@ -22,62 +22,42 @@ class A3MManager:
             config_string += f"--processing-config {k}={v} "
         return config_string
     
-    def _initiate_daemon(self, volume: Path):
+    def _a3md_checks(self):
         """
-        Ensure docker network a3m_network exists.
-        Create processing volume.
-        Ensure docker container a3md exists.
+        Ensures docker network a3m_network exists.
+        Ensures docker container a3md exists.
         """
-        
-        # Create network if it doesn't exist
         try:
             docker_client.networks.get("a3m-network")
-            logger.info('Network a3m-network already started')
-        except docker.errors.NotFound:
-            docker_client.networks.create("a3m-network")
-            logger.info('Created docker network a3m-network')
+            logger.debug('A3M network found')
+        except docker.errors.NotFound as e:
+            err_msg = f"A3M network not found: {e}"
+            logger.error(err_msg)
+            raise RuntimeError("A3M network not found") from e
+        except Exception as e:
+            err_msg = f"Unexpected error: {e}"
+            logger.error(err_msg)
+            raise RuntimeError(err_msg) from e
 
-        # Start container if it doesn't exist
         try:
             a3md_container = docker_client.containers.get("a3md")
-            logger.info('Container a3md already started')
-        except docker.errors.NotFound:
-            logger.info('Starting docker container a3md')
-            a3md_container = docker_client.containers.run(
-                f"ghcr.io/artefactual-labs/a3m:{self.a3m_version}",
-                name="a3md",
-                user=1000,
-                volumes=[f"{str(volume)}:{str(volume)}"],
-                detach=True,
-                remove=True,
-                network="a3m-network",
-                ports={"7000/tcp": 7000},
-                environment=["A3M_DEBUG=yes"],
-            )
-            self._wait_for_deamon_start(a3md_container)
-            
-            logger.info('Successfully started docker container a3md')
-            logger.debug(f'Container logs: {a3md_container.logs()}')
+            logger.debug('A3M Daemon container found')
+        except docker.errors.NotFound as e:
+            err_msg = f"A3M Daemon container not found: {e}"
+            logger.error(err_msg)
+            raise RuntimeError(err_msg) from e
+        except Exception as e:
+            err_msg = f"Unexpected error: {e}"
+            logger.error(err_msg)
+            raise RuntimeError(err_msg) from e
+        
         return a3md_container
 
-    def _wait_for_deamon_start(self, daemon):
-        """
-        Wait for the a3m daemon to become healthy within a timeout period.
-        """
-        timeout = 30
-        start_time = time.time()
-        while time.time() - start_time < timeout:
-            daemon.reload()
-            logger.debug(f"Container status: {daemon.status}")
-            if daemon.status == "running":
-                return
-            time.sleep(5)
-        raise TimeoutError(f"Container {daemon.name} did not become healthy within {timeout} seconds")
-    
     def _sanitize_container_name(self, input_string: str) -> str:
         """
-        Convert input string to fit docker container name format.
-        Adds UUID.
+        Sanitize input string to fit docker container name format.
+        Characters not allowed are replaced with underscores.
+        Appends UUID for uniqueness.
         """
         sanitized_string = re.sub(r'[^a-zA-Z0-9_.-]', '_', input_string)
         
@@ -104,11 +84,10 @@ class A3MManager:
             commands.append("--processing-config")
             commands.append(f"{k}={v}")
         container_name = self._sanitize_container_name(transfer_name)
-        logger.info(f'Creating Container: {container_name}')
-        logger.info(f'Starting A3M transfer {transfer_path}')
-        logger.debug(f'Commands {commands}')
+        logger.debug(f'Creating Container {container_name}')
+        logger.debug(f'Starting A3M transfer {transfer_path}')
         container = docker_client.containers.run(
-            f"ghcr.io/artefactual-labs/a3m:{self.a3m_version}",
+            self.a3m_docker_image,
             name=container_name,
             detach=True,
             network="a3m-network",
@@ -122,6 +101,7 @@ class A3MManager:
 
         if exit_status['StatusCode'] != 0:
             err_msg = f"Transfer failed with exit code: {exit_status['StatusCode']}"
+            logger.error(err_msg)
             logger.debug(f"Container logs: {container_logs}")
             raise RuntimeError(err_msg)
 
@@ -132,19 +112,30 @@ class A3MManager:
             reversed_logs
         )[0]
         if aip_uuid is None:
-            raise RuntimeError("Could not find AIP UUID")
-
-        aip_name = f"{transfer_name}-{aip_uuid}.7z"
-        return aip_name
+            err_msg = "Could not find AIP UUID"
+            logger.error(err_msg)
+            raise RuntimeError(err_msg)
+        logger.debug(f"AIP UUID: {aip_uuid}")
+        return aip_uuid
     
     def move_file_in_container(self, src_path: Path, dst_path: Path) -> Path:
         """
         Move a file within the running a3m daemon.
         """
-        exec_result = self.daemon.exec_run(f'mv "{src_path}" "{dst_path}"', user="root")
+        mv_exec_result = self.daemon.exec_run(f'mv "{src_path}" "{dst_path}"', user="root")
         new_path = dst_path / src_path.name
 
-        if exec_result.exit_code != 0:
-            logger.debug(exec_result)
-            raise RuntimeError(f"Failed to move the file within the container: {exec_result.output}")
+        if mv_exec_result.exit_code != 0:
+            err_msg = f"Failed to move the file within the container: {mv_exec_result.output}"
+            logger.error(err_msg)
+            raise RuntimeError(err_msg)
+        
+        # Change ownership of the file to the current user
+        chown_exec_result = self.daemon.exec_run(f'chown -R {os.getuid()}:{os.getgid()} "{new_path}"', user="root")
+
+        if chown_exec_result.exit_code != 0:
+            err_msg = f"Failed to change ownership of the file within the container: {chown_exec_result.output}"
+            logger.error(err_msg)
+            raise RuntimeError(err_msg)
+        
         return new_path

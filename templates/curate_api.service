@@ -1,0 +1,16 @@
+[Unit]
+Description=Curate Preservation API
+After=network.target
+
+[Service]
+User=pydio
+Group=pydio
+WorkingDirectory=/var/cells/penwern/services/preservation
+Environment="PATH=/var/cells/penwern/services/preservation/.venv/bin"
+ExecStart=/var/cells/penwern/services/preservation/.venv/bin/uvicorn api:app --host 0.0.0.0 --port 8000 --root-path /api
+Restart=always
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

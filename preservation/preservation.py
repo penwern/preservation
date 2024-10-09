@@ -1,29 +1,20 @@
-import argparse
 import json
 import logging
 import shutil
 import subprocess
-import sys
+import time
 import zipfile
 import xml.etree.ElementTree as ET
 from uuid import uuid4
-from datetime import datetime
 from pathlib import Path
-from py7zr import SevenZipFile
 
-import settings
-from curate import CurateManager
-from a3m import A3MManager
-from database import DatabaseManager
-
+from config import A3M_DOCKER_IMAGE, PROCESSING_DIRECTORY, CURATE_VERSION, CURATE_URL, WORKSPACE_MAPPING
+from preservation.curate import CurateManager
+from preservation.a3m import A3MManager
+from preservation.database import DatabaseManager
+from preservation.atom import AtoMManager
 
 logger = logging.getLogger("preservation")
-logger.setLevel(logging.DEBUG)
-logger.handlers.clear() # Remove existing handlers to prevent duplicate logging
-file_handler = logging.FileHandler(f'{settings.LOG_DIRECTORY}/preservation.log')
-file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
-logger.addHandler(file_handler)
-logger.propagate = False # Don't maintain logger
 
 namespaces = {
     'premis': 'http://www.loc.gov/premis/v3',
@@ -32,17 +23,11 @@ namespaces = {
 for prefix, uri in namespaces.items():
     ET.register_namespace(prefix, uri)
 
-
-def parse_arguments() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description='Curate Preservation')
-    parser.add_argument('-c', '--config_id', help='Config ID', type=int, required=True)
-    parser.add_argument('-n', '--nodes', help='Array of node submitted from Curate', required=True)
-    parser.add_argument('-u', '--user', help='User', required=True)
-    args = parser.parse_args()
-    return args
-
 class Package():
-    def __init__(self, node_json: dict, curate_prefix: str = None):
+    
+    children = []
+    
+    def __init__(self, node_json: dict, curate_prefix: Path = None):
         """
         - Expects curate node data.
         - Builds dc and isadg metadata json.
@@ -51,19 +36,20 @@ class Package():
         self.uuid = node_json['Uuid']
         
         self.is_dir = True if node_json['Type'] in ('COLLECTION', 2) else False
-        self.mime_type = self._parse_mime_type(node_json['MetaStore'].get('mime', None))
+        self.mime_type = self._strip_quotes(node_json['MetaStore'].get('mime', None))
+        self.atom_slug = self._strip_quotes(node_json['MetaStore'].get('usermeta-atom-linked-description', None))
         
         self.curate_path = Path(node_json['Path'])
+        # Package root path
         self.curate_prefix = curate_prefix if curate_prefix else self.curate_path.parent
-        self.local_path: Path = None # Updated as the package is processed
+        # Path updated as package is processed
+        self.current_path: Path = None
         
         relative_path = self.curate_path.relative_to(self.curate_prefix)
         self.object_path = f'objects/data/{relative_path}'
     
         # Metadata
         self.metadata = self._construct_metadata_json(node_json['MetaStore'])
-        
-        logger.info(f"Metadata: {self.metadata}")
         
         # Premis
         curate_premis_metadata = json.loads(node_json['MetaStore'].get('usermeta-premis-data', '{}'))
@@ -73,18 +59,14 @@ class Package():
             self.premis_xml_events_list = self._construct_premis_xml_events_list(curate_premis_metadata)
             if self.premis_xml_events_list:
                 self.premis_xml_object = self._construct_premis_xml_object()
-        self.children = []
-        
-        logger.debug(f"Package Created: {self}")
         
     def __str__(self) -> str:
         return f"{self.__class__.__name__}: {(vars(self))}"
         
-    def _parse_mime_type(self, curate_node_mimetype: str) -> str:
-        if curate_node_mimetype:
-            return curate_node_mimetype.strip('"')
-        else:
-            return None
+    def _strip_quotes(self, string: str):
+        if string:
+            return string.strip('"')
+        return None
     
     def _construct_metadata_json(self, curate_metastore: dict) -> dict:
         """
@@ -183,10 +165,10 @@ class Package():
         curate_path_parts = self.curate_path.parts
         workspace_name = curate_path_parts[0]
         node_path_parts = curate_path_parts[2:] if workspace_name == 'personal' else curate_path_parts[1:]
-        node_path = Path(settings.WORKSPACE_MAPPING[workspace_name], *node_path_parts)
+        node_path = Path(WORKSPACE_MAPPING[workspace_name], *node_path_parts)
         return node_path
     
-    def write_metadata_json(self, destination: Path):
+    def write_metadata_json(self, metadata_dir: Path) -> bool:
         """
         Writes DC and ISAD(G) json to package metadata directory.
         """
@@ -195,13 +177,15 @@ class Package():
             if child.metadata:
                 full_metadata_list.append(child.metadata)
                 
-        metadata_file_path = destination / 'metadata.json'
+        metadata_file_path = metadata_dir / 'metadata.json'
         if full_metadata_list:
             with open(metadata_file_path, 'w') as metadata_file:
                 json.dump(full_metadata_list, metadata_file, indent=4)
-            logger.debug(json.dumps(full_metadata_list, indent=4))
+            logger.info(f"Wrote json metadata to {metadata_file_path.relative_to(metadata_dir.parents[2])}")
+        else:
+            logger.debug(f"No json metadata to write")
         
-    def write_premis_xml(self, destination: Path, premis_agents: list):
+    def write_premis_xml(self, metadata_dir: Path, premis_agents: list):
         """
         Write premis xml to package metadata directory
         """
@@ -235,27 +219,27 @@ class Package():
             ET.SubElement(agent_identifier_elem, "premis:agentIdentifierType").text = agent['identifier']['type']
             ET.SubElement(agent_identifier_elem, "premis:agentIdentifierValue").text = agent['identifier']['value']
         
-        logger.debug(ET.tostring(premis_elem, encoding='UTF-8', xml_declaration=True).decode())
-        
         if premis_elem.find(f"{{{namespaces['premis']}}}object"):
-            premis_file_path = destination / 'premis.xml'
+            premis_file_path = metadata_dir / 'premis.xml'
 
             with open(premis_file_path , 'wb') as premis_file:
                 tree = ET.ElementTree(premis_elem)
                 tree.write(premis_file, encoding="UTF-8", xml_declaration=True)
             
-            logger.info(f"Wrote premis xml to {premis_file_path}")
-            logger.debug(f"Summary: XML Contains {len(list(premis_elem))} elements.")
+            logger.info(f"Wrote premis xml to {premis_file_path.relative_to(metadata_dir.parents[2])}")
+            logger.debug(f"Premis xml Contains {len(list(premis_elem))} elements.")
+        else:
+            logger.debug(f"No premis xml to write")
             
-    def update_local_path(self, new_local_path: Path):
+    def update_current_path(self, new_path: Path):
         """
         Ensure new local path exists and updates the local path of the package.
         """
-        if new_local_path.exists():
-            self.local_path = new_local_path
-            print(f"Updated local path to {self.local_path}")
+        if new_path.exists():
+            self.current_path = new_path
+            print(f"Updated local path to {self.current_path}")
         else:
-            raise FileExistsError(f"New local path {new_local_path} does not exist.")
+            raise FileExistsError(f"New local path {new_path} does not exist.")
 
 
 class Preservation():
@@ -265,17 +249,23 @@ class Preservation():
         """
         self.config_id = config_id
         self.user = user
-        self.processing_directory = Path(settings.PROCESSING_DIRECTORY)
+        self.processing_directory = Path(PROCESSING_DIRECTORY)
         self.processing_directory.mkdir(parents=True, exist_ok=True)
-        logger.debug(f"Created processing directory {self.processing_directory}")
         
         self.db_manager = DatabaseManager()
+        logger.info("Created database manager")
         
-        # Get preservation and a3m config from database
-        self.processing_config, a3m_config = self.db_manager.get_preservation_processing_configs(self.config_id)
+        self.curate_manager = CurateManager(self.user, CURATE_URL)
+        logger.info(f"Created curate manager {self.user}")
         
-        self.curate_manager = CurateManager(self.user, settings.CURATE_URL)
-        self.a3m_manager = A3MManager(a3m_config, self.processing_directory, settings.A3M_VERSION)
+        self.processing_config, a3m_config = self.db_manager.get_preservation_processing_configs(config_id)
+        self.a3m_manager = A3MManager(a3m_config, A3M_DOCKER_IMAGE)
+        logger.info(f"Created a3m manager for {A3M_DOCKER_IMAGE}")
+        
+        self.atom_config = self.db_manager.get_atom_config()
+        self.atom_manager = AtoMManager(self.atom_config) if self.atom_config else None
+        if self.atom_config:
+            logger.info(f"Created atom manager for {self.atom_manager.atom_url}")
         
         self.premis_agents = [
             {
@@ -283,7 +273,7 @@ class Preservation():
                 'type': 'Software',
                 'identifier': {
                     'type': 'Preservation System',
-                    'value': f'Curate Version={settings.CURATE_VERSION}'
+                    'value': f'Curate Version={CURATE_VERSION}'
                 }
             },
             {
@@ -313,14 +303,12 @@ class Preservation():
         command = ['7z', 'x', str(archive_path), '-o' + str(target_folder)]
         try:
             subprocess.run(command, check=True)
-            logger.debug("Extraction completed successfully.")
         except subprocess.CalledProcessError as e:
-            logger.error(f"An error occurred during extraction: {e}")
-            raise
+            logger.error("An error occurred during extraction")
+            raise RuntimeError("An error occurred during extraction.") from e
 
         return target_folder / archive_path.stem
 
-        
     def get_new_processing_directory(self) -> Path:
         """
         Returns processing directory with a new UUID directory.
@@ -337,6 +325,7 @@ class Preservation():
         """
         download_path = download_path_prefix / 'curate_download'
         downloaded_path = self.curate_manager.download_node(download_path, package.get_curate_alt_path())
+        logger.debug(f"Downloaded {downloaded_path}")
         return downloaded_path
     
     def prepare_package_for_transfer(self, package: Package, processing_directory: Path) -> Path:
@@ -348,78 +337,97 @@ class Preservation():
         Returns path to transfer directory.
         """
         transfer_directory = processing_directory / 'transfer'
-        transfer_data_path = transfer_directory / 'data'
-        transfer_data_path.mkdir(parents=True)
+        transfer_directory.mkdir(parents=True)
+        data_path = transfer_directory / 'data'
+        metadata_path = transfer_directory / 'metadata'
+        for path in [data_path, metadata_path]:
+            path.mkdir()
+            
+        logger.debug(f"Created transfer directory {transfer_directory}.")
 
-        if zipfile.is_zipfile(package.local_path):
-            with zipfile.ZipFile(package.local_path, 'r') as zip_ref:
-                zip_ref.extractall(transfer_data_path / package.local_path.stem)
-            logger.debug(f"Extracted {package.local_path} to {transfer_data_path / package.local_path.stem}.")
-        elif package.local_path.is_file():
-            shutil.copy(package.local_path, transfer_data_path)
-            logger.debug(f"Copied file {package.local_path} to {transfer_data_path}.")
-        elif package.local_path.is_dir():
-            shutil.copytree(package.local_path, transfer_data_path / package.local_path.stem)
-            logger.debug(f"Copied folder {package.local_path} to {transfer_data_path / package.local_path.stem}.")
+        if zipfile.is_zipfile(package.current_path):
+            with zipfile.ZipFile(package.current_path, 'r') as zip_ref:
+                zip_ref.extractall(data_path / package.current_path.stem)
+            logger.debug(f"Extracted {package.current_path} to {data_path / package.current_path.stem}.")
+        elif package.current_path.is_file():
+            shutil.move(package.current_path, data_path)
+            logger.debug(f"Moved file {package.current_path} to {data_path}.")
+        elif package.current_path.is_dir():
+            shutil.move(package.current_path, data_path / package.current_path.stem)
+            logger.debug(f"Moved folder {package.current_path} to {data_path / package.current_path.stem}.")
         else:
             raise RuntimeError('Node is in a format we cannot handle.')
         
-        logger.info(f"Created transfer directory {transfer_directory}.")
+        logger.info(f"Populated data directory {data_path.relative_to(processing_directory.parent)}")
         
-        transfer_metadata_path = transfer_directory / 'metadata'
-        transfer_metadata_path.mkdir()
-        logger.info("Writing json metadata")
-        package.write_metadata_json(transfer_metadata_path)
-        logger.info("Writing Premis")
-        package.write_premis_xml(transfer_metadata_path, self.premis_agents)
+        package.write_metadata_json(metadata_path)
+        package.write_premis_xml(metadata_path, self.premis_agents)
         
         return transfer_directory
     
-    def execute_transfer(self, package: Package, processing_directoy: Package) -> Path:
+    def execute_transfer(self, package: Package) -> str:
         """
         Executes the a3m transfer.
         Moves compressed AIP to shared volume.
         Extracts 7z AIP.
         Returns AIP Path.
         """
-        aip_name = self.a3m_manager.execute_a3m_transfer(package.local_path, package.curate_path.stem.strip().replace(' ', ''))
-        expected_container_aip_path = Path("/home/a3m/.local/share/a3m/share/completed/" + aip_name)
-        logger.info(f'Successfully created AIP in container {expected_container_aip_path}')
+        transfer_name = package.curate_path.stem.strip().replace(' ', '')
+        
+        logger.info(f'Submitting AIP to A3M')
+        aip_uuid = self.a3m_manager.execute_a3m_transfer(package.current_path, transfer_name)
+        logger.info(f'Successfully created AIP with UUID {aip_uuid}')
+        
+        return aip_uuid
+    
+    def move_and_extract_aip(self, processing_directoy: Path, expected_container_aip_path: Path):
         
         # Move AIP to Shared Volume
         package_aip_directoy = processing_directoy / 'aip'
         package_aip_directoy.mkdir()
         aip_path = self.a3m_manager.move_file_in_container(expected_container_aip_path, package_aip_directoy)
-        logger.info(f'Moved AIP to shared volume {aip_path}')
+        logger.debug(f'Moved AIP to shared volume {aip_path}')
 
-        # Extract 7z aip - we do this here as it allows us to compressing using user specified compression algorithm
+        # Extract 7z aip - we do this here as it allows us to compress using user specified compression algorithm
         # Could do 'if compress and compression algo not 7z'
         extracted_aip_path = self._extract_7z(aip_path)
-        logger.info(f'Extracted AIP to {extracted_aip_path}')
+        logger.debug(f'Extracted AIP to {extracted_aip_path}')
         return extracted_aip_path
     
     def compress_package(self, package: Package) -> Path:
         """
         Compresses the package.
         """
-        zip_path = package.local_path.with_suffix('.zip')
+        zip_path = package.current_path.with_suffix('.zip')
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            for file_path in package.local_path.rglob('*'):
-                arcname = file_path.relative_to(package.local_path)
+            for file_path in package.current_path.rglob('*'):
+                arcname = file_path.relative_to(package.current_path)
                 zipf.write(file_path, arcname=arcname)
-        logger.info(f"Compressed {package.local_path} to {zip_path}.")
+        logger.info(f"Compressed {package.current_path} to {zip_path}.")
         return zip_path
         
-    def upload_package(self, package: Package):
-        curate_destination = 'archive'
-        self.curate_manager.upload_node(package.local_path, curate_destination)
-        logger.info(f"Uploaded {package.local_path} to Curate {curate_destination}.")
+    def upload_aip(self, package: Package):
+        curate_destination = Path('archive')
+        logger.info(f"Uploading {package.current_path.name} to {curate_destination}")
+        self.curate_manager.upload_node(package.current_path, curate_destination)
+        logger.info(f"Uploaded {curate_destination / package.current_path.name}")
 
-
+    def upload_dip_to_atom(self, aip_uuid: str, processing_directoy: Path, slug: str):
+        package_dip_directoy = processing_directoy / 'dip'
+        package_dip_directoy.mkdir()
+        expected_dip_path = Path(f"/home/a3m/.local/share/a3m/share/dips/{aip_uuid}")
+        dip_path = self.a3m_manager.move_file_in_container(expected_dip_path, package_dip_directoy)
+        logger.info(f'Moved DIP to shared volume {dip_path}')
+        logger.info(f'Uploading DIP to AtoM')
+        self.atom_manager.upload_dip(dip_path, slug)
+        logger.info(f'Uploaded DIP to AtoM')
+        
+        
 def process_node(preserver: Preservation, node: dict, processing_directory: Path):
-    
     try:
-        logger.info(f"Processing node {node['Path']}")
+        logger.info(f"Processing {node['Path']} with UUID {node['Uuid']}")
+        
+        start = time.time()
         
         # Populate main package
         package = Package(node)
@@ -432,61 +440,56 @@ def process_node(preserver: Preservation, node: dict, processing_directory: Path
         # Download the package
         preserver.curate_manager.update_tag(package.uuid, 'Processing package...')
         downloaded_path = preserver.download_package(package, processing_directory)
-        package.update_local_path(downloaded_path)
+        package.update_current_path(downloaded_path)
         
         # Manipulate package to transfer state
         preserver.curate_manager.update_tag(package.uuid, 'Preparing package...')
         transfer_directory = preserver.prepare_package_for_transfer(package, processing_directory)
-        package.update_local_path(transfer_directory)
+        package.update_current_path(transfer_directory)
         
         # Execute A3M transfer on package
         preserver.curate_manager.update_tag(package.uuid, 'Submitting package...')
-        aip_path = preserver.execute_transfer(package, processing_directory)
-        package.update_local_path(aip_path)
+        aip_uuid = preserver.execute_transfer(package)
+        
+        # Extract and move AIP
+        preserver.curate_manager.update_tag(package.uuid, 'Extracting AIP...')
+        expected_container_aip_path = Path(f"/home/a3m/.local/share/a3m/share/completed/{(package.curate_path.stem).replace(' ', '')}-{aip_uuid}.7z")
+        extracted_aip_path = preserver.move_and_extract_aip(processing_directory, expected_container_aip_path)
+        package.update_current_path(extracted_aip_path)
         
         # Compress AIP if enabled in processing config
         if preserver.processing_config['compress_aip']:
             preserver.curate_manager.update_tag(package.uuid, 'Compressing AIP...')
-            extracted_path = preserver.compress_package(package)
-            package.update_local_path(extracted_path)
+            compressed_path = preserver.compress_package(package)
+            package.update_current_path(compressed_path)
         
         # Upload to Curate
         preserver.curate_manager.update_tag(package.uuid, 'Uploading AIP...')
-        preserver.upload_package(package)
+        preserver.upload_aip(package)
+        
+        # Upload DIP to AtoM
+        if preserver.a3m_manager.processing_config['dip_enabled'] or package.atom_slug:
+            if not package.atom_slug:
+                raise ValueError("Slug not found in package metadata.")
+            preserver.curate_manager.update_tag(package.uuid, 'Uploading DIP...')
+            preserver.upload_dip_to_atom(aip_uuid, processing_directory, package.atom_slug)
+
+        if preserver.user in ['admin']:
+            now = time.time()
+            length = now - start
+            preserver.curate_manager.update_tag(package.uuid, f'🔒 Preserved in {length:.2f}s')
+        else:
+            preserver.curate_manager.update_tag(package.uuid, '🔒 Preserved')
+
     except Exception as e:
         logger.error(e)
+        logger.info(f"============= Failed {node['Path']} in {length:.2f} seconds =============")
         preserver.curate_manager.update_tag(package.uuid, 'Preservation Failed - Try Again')
-        # shutil.rmtree(processing_directory)
-        raise e
-    preserver.curate_manager.update_tag(package.uuid, '🔒 Preserved')
+        raise 
+    end = time.time()
+    length = end - start
+    logger.info(f"============= Completed {node['Path']} in {length:.2f} seconds =============")
     
-def main():
-
-    logger.debug(f"Arguments: {sys.argv}")
-    try:
-        args = parse_arguments()
-    except Exception as e:
-        logger.error(e)
-        raise
-    logger.debug(f"Node Type: {type(args.nodes)}") 
-    try:
-        preserver = Preservation(config_id = args.config_id, user=args.user)
-    except Exception as e:
-        logger.error(e)
-        raise
-    for node in json.loads(args.nodes):
-        try:
-            processing_directory = preserver.get_new_processing_directory()
-            process_node(preserver, node, processing_directory)
-        except Exception:
-            continue
-
-if __name__ == '__main__':
-    logger.info(' =============== NEW =============== ')
-    try:
-        main()
-    except Exception as e:
-        logger.error(e)
-        raise
-    logger.info(' ============= COMPLETE ============= \n')
+    logger.info(f"Removing processing directory {processing_directory}")
+    shutil.rmtree(processing_directory)
 
