@@ -65,7 +65,7 @@ class CurateManager:
         try:
             headers = {
                 'Content-Type': 'application/json',
-                'Authorization': f"Bearer {self.token(self._user)}"
+                'Authorization': f"Bearer {self.token('admin')}"
             }
             payload = json.dumps({
                 "MetaDatas": [
