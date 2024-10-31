@@ -53,17 +53,15 @@ async def search_atom(request: Request):
         
         config = AtomConfigSchema(**atom_config)
         
-        atom_api_url = f"{config.atom_url}/api/informationobjects/{query_string}"
+        atom_api_url = f"{config.atom_url}/api/informationobjects?{query_string}"
         headers = {'REST-API-Key': config.atom_api_key}
 
         response = requests.get(atom_api_url, headers=headers)
 
-        if response.status_code != 200:
-            logger.error(f"Error from AtoM API: {response.status_code}")
-            raise HTTPException(status_code=502, detail=f"Error from AtoM API: Status code {response.status_code}")
-        
+        response.raise_for_status()
+
         return response.json()
 
     except Exception as e:
         logger.error(f"Exception: {e}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
+        raise
