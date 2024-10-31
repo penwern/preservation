@@ -2,6 +2,7 @@ import subprocess
 import urllib.parse
 import requests
 from pathlib import Path
+from urllib.parse import urlparse
 
 class AtoMManager():
     def __init__(self, atom_config: dict):
@@ -11,8 +12,11 @@ class AtoMManager():
         self.atom_password = atom_config['password']
     
     def upload_dip(self, dip_path: Path, slug: str):
+        # Get hostname
+        hostname = urlparse(self.atom_url).netloc
+
         # RSync to AtoM
-        rsync_command = ["rsync", "-avz", str(dip_path), f"archivematica@{self.atom_url}:/home/archivematica/atom_sword_deposit/"]
+        rsync_command = ["rsync", "-avz", str(dip_path), f"archivematica@{hostname}:/home/archivematica/atom_sword_deposit/"]
         print(rsync_command)
         
         # Execute RSync
