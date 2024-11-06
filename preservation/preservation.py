@@ -424,6 +424,7 @@ class Preservation():
         
         
 def process_node(preserver: Preservation, node: dict, processing_directory: Path):
+    # A3M
     try:
         logger.info(f"Processing {node['Path']} with UUID {node['Uuid']}")
         
@@ -466,13 +467,6 @@ def process_node(preserver: Preservation, node: dict, processing_directory: Path
         # Upload to Curate
         preserver.curate_manager.update_tag(package.uuid, 'Uploading AIP...')
         preserver.upload_aip(package)
-        
-        # Upload DIP to AtoM
-        if preserver.a3m_manager.processing_config['dip_enabled'] or package.atom_slug:
-            if not package.atom_slug:
-                raise ValueError("Slug not found in package metadata.")
-            preserver.curate_manager.update_tag(package.uuid, 'Uploading DIP...')
-            preserver.upload_dip_to_atom(aip_uuid, processing_directory, package.atom_slug)
 
         if preserver.user in ['admin']:
             now = time.time()
@@ -480,12 +474,26 @@ def process_node(preserver: Preservation, node: dict, processing_directory: Path
             preserver.curate_manager.update_tag(package.uuid, f'🔒 Preserved in {length:.2f}s')
         else:
             preserver.curate_manager.update_tag(package.uuid, '🔒 Preserved')
-
     except Exception as e:
         logger.error(e)
-        logger.info(f"============= Failed {node['Path']} in {length:.2f} seconds =============")
+        logger.info(f"============= AIP Failed {node['Path']} in {length:.2f} seconds =============")
         preserver.curate_manager.update_tag(package.uuid, 'Preservation Failed - Try Again')
         raise 
+
+    # DIP Upload
+    try:
+        if preserver.a3m_manager.processing_config['dip_enabled'] or package.atom_slug:
+            if not package.atom_slug:
+                raise ValueError("Slug not found in package metadata.")
+            preserver.curate_manager.update_tag(package.uuid, 'Uploading DIP...', dip=True)
+            preserver.upload_dip_to_atom(aip_uuid, processing_directory, package.atom_slug)
+            preserver.curate_manager.update_tag(package.uuid, 'DIP Uploaded', dip=True)
+    except Exception as e:
+        logger.error(e)
+        logger.info(f"============= DIP Failed {node['Path']} in {length:.2f} seconds =============")
+        preserver.curate_manager.update_tag(package.uuid, 'DIP Failed', dip=True)
+        raise
+
     end = time.time()
     length = end - start
     logger.info(f"============= Completed {node['Path']} in {length:.2f} seconds =============")

@@ -86,6 +86,31 @@ class CurateManager:
             logger.error(err_msg)
             raise RuntimeError(err_msg) from e
 
+    def update_tag(self, node_id: str, tag: str, dip: bool = False):
+        try:
+            headers = {
+                'Content-Type': 'application/json',
+                'Authorization': f"Bearer {self.token('admin')}"
+            }
+            payload = json.dumps({
+                "MetaDatas": [
+                    {
+                        "JsonValue": f"\"{tag}\"",
+                        "Namespace": f"{'usermeta-dip-progress' if dip else 'usermeta-a3m-progress'}",
+                        "NodeUuid": node_id
+                    }
+                ],
+                "Operation": "PUT"
+            })
+            endpoint = f'{self._url}/a/user-meta/update'
+            response = requests.put(endpoint, headers=headers, data=payload)
+            response.raise_for_status()
+            logger.info(f"{'usermeta-dip-progress' if dip else 'usermeta-a3m-progress'}: {tag} updated for node: {node_id}")
+        except Exception as e:
+            err_msg = f"Unexpected error: {e}"
+            logger.error(err_msg)
+            raise RuntimeError(err_msg) from e
+
     def gather_child_nodes(self, parent_curate_node_path: str) -> list:
         logger.info(f"Gathering children of {parent_curate_node_path}")
         try:
