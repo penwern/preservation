@@ -426,17 +426,19 @@ class Preservation():
 def process_node(preserver: Preservation, node: dict, processing_directory: Path):
     # A3M
     try:
-        logger.info(f"Processing {node['Path']} with UUID {node['Uuid']}")
+        logger.info(f"Processing Curate Package: {node['Uuid']}")
         
         start = time.time()
-        
+
+        # TODO: Node data collection requires Node Path not Uuid
+        # Recieve curate paths? Finda a way to use the Uuid?
+        node_data = preserver.curate_manager.gather_node_data(package.curate_path)
+        node_parent, node_children = node_data.get['Parent'], node_data.get(['Children'], [])
         # Populate main package
-        package = Package(node)
-        
-        # Populate child packages of directory packages
-        if package.is_dir:
-            for child_node in preserver.curate_manager.gather_child_nodes(package.curate_path):
-                package.children.append(Package(child_node, package.curate_prefix))
+        package = Package(node_parent)
+        # Populate child packages
+        for child_node in node_children:
+            package.children.append(Package(child_node, package.curate_prefix))
         
         # Download the package
         preserver.curate_manager.update_tag(package.uuid, 'Processing package...')

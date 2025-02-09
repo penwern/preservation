@@ -110,9 +110,9 @@ class CurateManager:
             err_msg = f"Unexpected error: {e}"
             logger.error(err_msg)
             raise RuntimeError(err_msg) from e
-
-    def gather_child_nodes(self, parent_curate_node_path: str) -> list:
-        logger.info(f"Gathering children of {parent_curate_node_path}")
+        
+    def gather_node_data(self, parent_curate_node_path: str) -> list:
+        logger.info(f"Gathering node data for of {parent_curate_node_path}")
         try:
             headers = {
                 'Content-Type': 'application/json',
@@ -132,7 +132,7 @@ class CurateManager:
             err_msg = f"Unexpected error: {e}"
             logger.error(err_msg)
             raise RuntimeError(err_msg) from e
-        return response.json().get('Children', [])
+        return response.json()
 
     def download_node(self, destination_path: Path, node_path: Path) -> Path:
         destination_path.mkdir(parents=True, exist_ok=True)
