@@ -52,7 +52,15 @@ class Package():
         self.metadata = self._construct_metadata_json(node_json['MetaStore'])
         
         # Premis
-        curate_premis_metadata = json.loads(node_json['MetaStore'].get('usermeta-premis-data', '{}'))
+        premis_raw = (
+            meta_store.get('usermeta-premis-data')
+            or meta_store.get('Premis')
+            or '{}'
+        )
+        if isinstance(raw, dict):
+            curate_premis_metadata = raw
+        else:
+            curate_premis_metadata = json.loads(raw)
         self.premis_xml_object = None
         self.premis_xml_events_list = None
         if curate_premis_metadata:
