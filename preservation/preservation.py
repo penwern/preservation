@@ -33,11 +33,14 @@ class Package():
         - Builds dc and isadg metadata json.
         - Builds premis object element and event elements.
         """
+
+        meta_store = node_json['MetaStore']
+
         self.uuid = node_json['Uuid']
         
         self.is_dir = True if node_json['Type'] in ('COLLECTION', 2) else False
-        self.mime_type = self._strip_quotes(node_json['MetaStore'].get('mime', None))
-        self.atom_slug = self._strip_quotes(node_json['MetaStore'].get('usermeta-atom-linked-description', None))
+        self.mime_type = self._strip_quotes(meta_store.get('mime', None))
+        self.atom_slug = self._strip_quotes(meta_store.get('usermeta-atom-linked-description', None))
         
         self.curate_path = Path(node_json['Path'])
         # Package root path
@@ -49,7 +52,7 @@ class Package():
         self.object_path = f'objects/data/{relative_path}'
     
         # Metadata
-        self.metadata = self._construct_metadata_json(node_json['MetaStore'])
+        self.metadata = self._construct_metadata_json(meta_store)
         
         # Premis
         premis_raw = (
@@ -57,10 +60,10 @@ class Package():
             or meta_store.get('Premis')
             or '{}'
         )
-        if isinstance(raw, dict):
-            curate_premis_metadata = raw
+        if isinstance(premis_raw, dict):
+            curate_premis_metadata = premis_raw
         else:
-            curate_premis_metadata = json.loads(raw)
+            curate_premis_metadata = json.loads(premis_raw)
         self.premis_xml_object = None
         self.premis_xml_events_list = None
         if curate_premis_metadata:
